@@ -103,25 +103,29 @@ def refresh() {
         log.warn('missing setting configuration')
         return
     }
-    try {
-        def payloadData = currentVersion >= 323 ? getSign() : [MessageId: settings.messageId, Sign: settings.sign, CurrentTime: settings.timestamp]
+    log.debug('Refreshing')
 
-        log.debug('Refreshing')
-        
-        def hubAction = new hubitat.device.HubAction([
-            method: 'POST',
-            path: '/config',
-            headers: [
-                'HOST': settings.deviceIp,
-                'Content-Type': 'application/json',
-            ],
-            body: '{"payload":{},"header":{"messageId":"'+payloadData.get('MessageId')+'","method":"GET","from":"http://'+settings.deviceIp+'/subscribe","sign":"'+ payloadData.get('Sign') +'","namespace": "Appliance.System.All","triggerSrc":"AndroidLocal","timestamp":' + payloadData.get('CurrentTime') + ',"payloadVersion":1}}'
-        ])
-        log.debug hubAction
-        return hubAction
-    } catch (Exception e) {
-        log.debug "runCmd hit exception ${e} on ${hubAction}"
+    // Appliance.System.All returns a large response that some devices now answer with
+    // an empty body, so poll the much smaller door state and only fetch System.All
+    // when we still need the firmware version/model.
+    sendHubCommand(buildGetRequest('Appliance.GarageDoor.State', currentVersion))
+    if (!device.currentValue('version')) {
+        sendHubCommand(buildGetRequest('Appliance.System.All', currentVersion))
     }
+}
+
+def buildGetRequest(String namespace, int currentVersion) {
+    def payloadData = currentVersion >= 323 ? getSign() : [MessageId: settings.messageId, Sign: settings.sign, CurrentTime: settings.timestamp]
+
+    return new hubitat.device.HubAction([
+        method: 'POST',
+        path: '/config',
+        headers: [
+            'HOST': settings.deviceIp,
+            'Content-Type': 'application/json',
+        ],
+        body: '{"payload":{},"header":{"messageId":"'+payloadData.get('MessageId')+'","method":"GET","from":"http://'+settings.deviceIp+'/subscribe","sign":"'+ payloadData.get('Sign') +'","namespace":"' + namespace + '","triggerSrc":"AndroidLocal","timestamp":' + payloadData.get('CurrentTime') + ',"payloadVersion":1}}'
+    ])
 }
 
 def open() {
@@ -169,7 +173,12 @@ def parse(String description) {
     // Close/Open request was sent
     if(body.header?.method == "SETACK") return
 
-    if (body.payload?.all) {
+    if (body.payload?.state instanceof List) {
+        def channelState = body.payload.state.find { it.channel == settings.channel.intValue() } ?: body.payload.state[settings.channel.intValue() - 1]
+        def state = channelState?.open
+        sendEvent(name: 'door', value: state ? 'open' : 'closed')
+        sendEvent(name: 'contact', value: state ? 'open' : 'closed')
+    } else if (body.payload?.all) {
         def state = body.payload.all.digest.garageDoor[settings.channel.intValue() - 1].open
         sendEvent(name: 'door', value: state ? 'open' : 'closed')
         sendEvent(name: 'contact', value: state ? 'open' : 'closed')
