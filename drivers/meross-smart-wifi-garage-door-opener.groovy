@@ -141,25 +141,42 @@ def updated() {
 
 def parse(String description) {
     def msg = parseLanMessage(description)
-    def body = parseJson(msg.body)
-    
-    if(msg.status != 200) {
-         log.error("Request failed")
-         return
+
+    if (msg.status != 200) {
+        log.error("Request failed with HTTP status ${msg.status} (check the Device IP Address setting)")
+        return
     }
-    
+
+    if (!msg.body) {
+        log.error("Device returned an empty response (status ${msg.status}); door state not updated")
+        log("Raw response: ${description}")
+        return
+    }
+
+    def body
+    try {
+        body = parseJson(msg.body)
+    } catch (e) {
+        log.error("Could not parse device response: ${msg.body}")
+        return
+    }
+
+    if (body.payload?.error) {
+        log.error("Device rejected request: ${body.payload.error} (check the Key setting)")
+        return
+    }
+
     // Close/Open request was sent
-    if(body.header.method == "SETACK") return
-    
-    if (body.payload.all) {
+    if(body.header?.method == "SETACK") return
+
+    if (body.payload?.all) {
         def state = body.payload.all.digest.garageDoor[settings.channel.intValue() - 1].open
         sendEvent(name: 'door', value: state ? 'open' : 'closed')
         sendEvent(name: 'contact', value: state ? 'open' : 'closed')
         sendEvent(name: 'version', value: body.payload.all.system.firmware.version, isStateChange: false)
         sendEvent(name: 'model', value: body.payload.all.system.hardware.type, isStateChange: false)
     } else {
-        //refresh()
-        log.error ("Request failed")
+        log.error("Unexpected response from device: ${msg.body}")
     }
 }
 
